@@ -99,10 +99,36 @@ between commas."
   :type 'string
   :group 'org-recur)
 
+(defcustom org-recur-logging-enable nil
+  "Enable logging of states for completed tasks."
+  :type 'boolean
+  :group 'org-recur)
+
 ;; Internals
 
 ;; Simple regexp for extracting the date string from headings, and highlighting
 ;; in org-agenda.
+(defcustom org-recur-logging-initial-state "TODO"
+  "Initial TODO state to show if org-log-done is non-nil.
+The state will show up as STATE \"FINISH_STATE\" from \"INITIAL_STATE\" [TIMESTAMP]"
+  :type 'string
+  :group 'org-recur
+  )
+
+(defcustom org-recur-logging-finish-state "DONE"
+  "Final TODO state to show if org-log-done is non-nil.
+The state will show up as STATE \"FINISH_STATE\" from \"INITIAL_STATE\" [TIMESTAMP]"
+  :type 'string
+  :group 'org-recur
+  )
+
+(defcustom org-recur-logging-skip-state "SKIP"
+  "Final TODO state to show if org-log-done is non-nil.
+The state will show up as STATE \"SKIP_STATE\" from \"INITIAL_STATE\" [TIMESTAMP]"
+  :type 'string
+  :group 'org-recur
+  )
+
 (defconst org-recur--regexp "|\\([^|]*\\)|")
 ;; More complex regexp for highlighting in org-mode, without also highlighting
 ;; tables.
@@ -152,13 +178,31 @@ Return nil if no recurrence found."
 (defun org-recur--org-schedule (date finish)
   "Schedule a task in `org-mode' according to the org-recur syntax in DATE.
 When FINISH is t, optionally completes and archives the task, based on the
-values of `org-recur-finish-done' and `org-recur-finish-archive'."
-  (let ((next-date (org-recur--get-next-date date)))
+values of `org-recur-finish-done' and `org-recur-finish-archive'.
+
+If `org-recur-logging-enable' is non-nil, the task states will be logged
+according to the value of `org-log-done'. When FINISH is t, the final TODO
+state will take the value of `org-recur-logging-finish-state', otherwise it
+will take the value of `org-recur-logging-skip-state'."
+  (let ((next-date (org-recur--get-next-date date))
+        (start-log-state org-recur-logging-initial-state)
+        (final-log-state (cond (finish
+                            org-recur-logging-finish-state)
+                           (t
+                            org-recur-logging-skip-state))))
     (cond (next-date
-           (org-schedule nil next-date))
+           (progn
+             (if org-recur-logging-enable
+                 ;; TODO Figure out how to set logging without going through
+                 ;; 3 separate steps.
+                 (progn
+                   (org-todo start-log-state)
+                   (org-todo final-log-state)
+                   (org-todo "")))
+             (org-schedule nil next-date)))
           (finish
            (when org-recur-finish-done
-             (org-todo 'done))
+             (org-todo final-log-state))
            (when org-recur-finish-archive
              (if (eq 'note org-log-done)
                  (message "Warning: automatic archiving is disabled when org-log-done is t.")
@@ -166,13 +210,31 @@ values of `org-recur-finish-done' and `org-recur-finish-archive'."
 (defun org-recur--org-agenda-schedule (date finish)
   "Schedule a task in `org-mode-agenda' according to org-recur syntax in DATE.
 When FINISH is t, optionally completes and archives the task, based on the
-values of `org-recur-finish-done' and `org-recur-finish-archive'."
-  (let ((next-date (org-recur--get-next-date date)))
+values of `org-recur-finish-done' and `org-recur-finish-archive'.
+
+If `org-recur-logging-enable' is non-nil, the task states will be logged
+according to the value of `org-log-done'. When FINISH is t, the final TODO
+state will take the value of `org-recur-logging-finish-state', otherwise it
+will take the value of `org-recur-logging-skip-state'."
+  (let ((next-date (org-recur--get-next-date date))
+        (start-log-state org-recur-logging-initial-state)
+        (final-log-state (cond (finish
+                                org-recur-logging-finish-state)
+                               (t
+                                org-recur-logging-skip-state))))
     (cond (next-date
-           (org-agenda-schedule nil next-date))
+           (progn
+             (if org-recur-logging-enable
+                 ;; TODO Figure out how to set logging without going through
+                 ;; 3 separate steps.
+                 (progn
+                   (org-agenda-todo start-log-state)
+                   (org-agenda-todo final-log-state)
+                   (org-agenda-todo "")))
+           (org-agenda-schedule nil next-date)))
           (finish
            (when org-recur-finish-done
-             (org-agenda-todo 'done))
+             (org-agenda-todo final-log-state))
            (when org-recur-finish-archive
              (if (eq 'note org-log-done)
                  (message "Warning: automatic archiving is disabled when org-log-done is t.")
@@ -190,6 +252,20 @@ values of `org-recur-finish-done' and `org-recur-finish-archive'."
          (buffer-substring-no-properties
           (line-beginning-position) (line-end-position))))
     (org-recur--org-agenda-schedule heading t)))
+(defun org-recur--org-skip ()
+  "Reschedule, or optionally skip and archive, a task in `org-mode' according to its recurrence string."
+  (let ((heading (substring-no-properties (org-get-heading))))
+    (org-recur--org-schedule heading nil)))
+(defun org-recur--org-agenda-skip ()
+  "Reschedule, or optionally skip and archive, a task in `org-mode-agenda' according to its recurrence string."
+  (let ((heading
+         ;; FIXME: Find a more robust way of getting the header
+         ;; from org-agenda view? This approach seems sufficient so
+         ;; far though.
+         (buffer-substring-no-properties
+          (line-beginning-position) (line-end-position))))
+    (org-recur--org-agenda-schedule heading nil)))
+
 
 (defun org-recur--highlight-agenda ()
   "Highlight org-recur syntax in `org-agenda'."
@@ -221,7 +297,9 @@ values of `org-recur-finish-done' and `org-recur-finish-archive'."
 
 ;;;###autoload
 (defun org-recur-finish ()
-  "Reschedule an `org-mode' task according to its org-recur date string.
+  "Reschedule an `org-mode' task according to its org-recur date string
+after successfully completing the task.
+
 The org-recur syntax is '|DATE|', where DATE can be either an
 absolute date or more commonly a delta, e.g. a task heading
 containing '|+2|' indicates to `org-recur-finish' to reschedule
@@ -236,14 +314,50 @@ selected. For example, '|Mon,Fri|' indicates that the task should
 recur every Monday and Friday, and the soonest among them is
 chosen when calling `org-recur-finish'.
 
+If `org-recur-logging' is non-nil, log the successful completion of the
+task with the values of `org-recur-logging-initial-state' and
+`org-recur-logging-finish-state'.
+
 If the task does not contain org-recur syntax, then depending on
 the values of `org-recur-finish-done' and
-`org-recur-finish-archive' change the task status to DONE and/or
-archive it, respectively"
+`org-recur-finish-archive' change the task status to
+`org-recur-logging-finish-state' and/or archive it, respectively"
   (interactive)
   (if (derived-mode-p 'org-agenda-mode)
       (org-recur--org-agenda-finish)
     (org-recur--org-finish)))
+
+;;;###autoload
+(defun org-recur-skip ()
+  "Reschedule an `org-mode' task according to its org-recur date string
+after failing to complete the task.
+
+The org-recur syntax is '|DATE|', where DATE can be either an
+absolute date or more commonly a delta, e.g. a task heading
+containing '|+2|' indicates to `org-recur-finish' to reschedule
+the task to two days from now.
+
+All date strings supported by `org-read-date' are available. Also
+available is 'wkdy' (customizable with `org-recur-weekday') which
+schedules the task to the next weekday (customizable with
+`org-recur-weekday-recurrence'). Also possible is the 'N1,N2,...'
+syntax, wherein the earliest date string among the set of N is
+selected. For example, '|Mon,Fri|' indicates that the task should
+recur every Monday and Friday, and the soonest among them is
+chosen when calling `org-recur-finish'.
+
+If `org-recur-logging' is non-nil, log the successful completion of the
+task with the values of `org-recur-logging-initial-state' and
+`org-recur-logging-skip-state'.
+
+If the task does not contain org-recur syntax, then depending on
+the values of `org-recur-finish-done' and
+`org-recur-finish-archive' change the task status to
+`org-recur-logging-skip-state' and/or archive it, respectively"
+  (interactive)
+  (if (derived-mode-p 'org-agenda-mode)
+      (org-recur--org-agenda-skip)
+    (org-recur--org-skip)))
 
 ;;;###autoload
 (defun org-recur-schedule-date (date)

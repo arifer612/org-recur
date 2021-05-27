@@ -139,6 +139,10 @@ Keep the task metadata clean:
 ;; Don't log the time a task was rescheduled or redeadlined.
 (setq org-log-redeadline nil)
 (setq org-log-reschedule nil)
+
+;; Log time for tasks with org-recur syntax.
+(setq org-recur-enable-logging t)
+(setq org-recur-logging-initial-state "PROG")
 ```
 
 Prefer rescheduling to future dates and times:
